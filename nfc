@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NFC Reader & Writer</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--ink:#1f1e1b;--mute:#6b6a64;--line:#e3e1da;--acc:#2f5fd0;--ok:#1d7a46;--bad:#b3261e}
+@media (prefers-color-scheme:dark){:root{--bg:#161614;--card:#201f1c;--ink:#f0eee8;--mute:#9a9890;--line:#34332f;--acc:#7da2ff;--ok:#5fcf8e;--bad:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,sans-serif;padding:16px;max-width:560px;margin-inline:auto}
+h1{font-size:22px;margin:4px 0 12px}
+.tabs{display:flex;gap:6px;margin-bottom:12px}
+.tabs button{flex:1;padding:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;font:inherit;cursor:pointer}
+.tabs button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+label{display:block;font-size:13px;color:var(--mute);margin:10px 0 4px}
+select,input,textarea{width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit}
+textarea{min-height:90px}
+.go{width:100%;margin-top:14px;padding:13px;border:0;border-radius:10px;background:var(--acc);color:#fff;font:600 16px system-ui;cursor:pointer}
+.go.stop{background:var(--mute)}
+#status{padding:10px 12px;border-radius:10px;font-size:14px;margin-bottom:12px;background:var(--card);border:1px solid var(--line)}
+#status.ok{color:var(--ok)}#status.bad{color:var(--bad)}
+.rec{border-top:1px solid var(--line);padding:8px 0;word-break:break-word}
+.rec:first-child{border-top:0}
+.tag{font-size:12px;color:var(--mute)}
+.hide{display:none}
+</style>
+</head>
+<body>
+<h1>NFC Reader &amp; Writer</h1>
+<div id="status">Checking NFC support…</div>
+<div class="tabs">
+  <button id="tRead" class="on">Read</button>
+  <button id="tWrite">Write</button>
+</div>
+<section id="pRead" class="card">
+  <div class="tag">Tap Start, then hold an NFC tag against the back of your phone.</div>
+  <button class="go" id="bRead">Start scanning</button>
+  <div id="out" style="margin-top:14px"></div>
+</section>
+<section id="pWrite" class="card hide">
+  <label for="type">Record type</label>
+  <select id="type">
+    <option value="text">Text</option>
+    <option value="url">URL</option>
+    <option value="tel">Phone number</option>
+    <option value="mime">JSON / custom MIME</option>
+    <option value="empty">Erase tag (empty record)</option>
+  </select>
+  <label for="val" id="valLbl">Text</label>
+  <textarea id="val" placeholder="Hello"></textarea>
+  <label><input type="checkbox" id="ow" checked style="width:auto"> Overwrite existing data</label>
+  <button class="go" id="bWrite">Write to tag</button>
+  <div class="tag" style="margin-top:10px">After tapping, hold the tag steady against your phone until it confirms.</div>
+</section>
+<script>
+const $=id=>document.getElementById(id);
+const st=(m,c)=>{const s=$('status');s.textContent=m;s.className=c||''};
+let ctrl=null;
+const inFrame=(()=>{try{return window.top!==window.self}catch(e){return true}})();
+if(!('NDEFReader' in window)){
+  st('Web NFC is not available here. It needs Chrome on an Android phone with NFC enabled, over HTTPS.','bad');
+}else if(inFrame){
+  st('NFC may be blocked because this page is embedded. Open it as a full page in Chrome.');
+}else{
+  st('Ready. NFC is supported.','ok');
+}
+function tab(w){
+  $('pRead').classList.toggle('hide',w!=='r');
+  $('pWrite').classList.toggle('hide',w!=='w');
+  $('tRead').classList.toggle('on',w==='r');
+  $('tWrite').classList.toggle('on',w==='w');
+}
+$('tRead').onclick=()=>tab('r');
+$('tWrite').onclick=()=>tab('w');
+const hint={text:['Text','Hello'],url:['URL','https://example.com'],tel:['Phone number','+355 69 000 0000'],mime:['JSON','{"id":1}'],empty:['','']};
+$('type').onchange=()=>{
+  const t=$('type').value;
+  $('valLbl').textContent=hint[t][0];
+  $('val').placeholder=hint[t][1];
+  $('val').classList.toggle('hide',t==='empty');
+  $('valLbl').classList.toggle('hide',t==='empty');
+};
+function el(tag,txt,cls){const e=document.createElement(tag);if(txt!=null)e.textContent=txt;if(cls)e.className=cls;return e}
+function decode(r){
+  const dec=new TextDecoder(r.encoding||'utf-8');
+  let data='';
+  if(r.data){
+    if(['text','url','absolute-url','mime'].includes(r.recordType)){
+      try{data=dec.decode(r.data)}catch(e){data='(unreadable)'}
+    }else{
+      data=Array.from(new Uint8Array(r.data.buffer)).map(b=>b.toString(16).padStart(2,'0')).join(' ');
+    }
+  }
+  return data;
+}
+$('bRead').onclick=async()=>{
+  const b=$('bRead');
+  if(ctrl){ctrl.abort();return}
+  if(!('NDEFReader' in window)){st('Web NFC not supported on this device/browser.','bad');return}
+  try{
+    ctrl=new AbortController();
+    const r=new NDEFReader();
+    await r.scan({signal:ctrl.signal});
+    b.textContent='Stop scanning';b.classList.add('stop');
+    st('Scanning… hold a tag to the back of your phone.','ok');
+    r.onreadingerror=()=>st('Tag detected but could not be read.','bad');
+    r.onreading=e=>{
+      const out=$('out');out.textContent='';
+      out.append(el('div','Serial: '+(e.serialNumber||'unknown'),'tag'));
+      if(!e.message.records.length)out.append(el('div','Tag is empty.'));
+      e.message.records.forEach(rec=>{
+        const d=el('div',null,'rec');
+        d.append(el('div',rec.recordType+(rec.mediaType?' · '+rec.mediaType:''),'tag'));
+        const v=decode(rec);
+        if(rec.recordType==='url'||/^https?:\/\//.test(v)){
+          const a=el('a',v);a.href=v;a.target='_blank';a.rel='noopener';d.append(a);
+        }else d.append(el('div',v));
+        out.append(d);
+      });
+      st('Tag read.','ok');
+    };
+    ctrl.signal.addEventListener('abort',()=>{ctrl=null;b.textContent='Start scanning';b.classList.remove('stop');st('Scanning stopped.')});
+  }catch(err){
+    ctrl=null;
+    st('Could not start: '+err.message,'bad');
+  }
+};
+$('bWrite').onclick=async()=>{
+  if(!('NDEFReader' in window)){st('Web NFC not supported on this device/browser.','bad');return}
+  const t=$('type').value,v=$('val').value;
+  let rec;
+  try{
+    if(t!=='empty'&&!v.trim()){st('Enter a value first.','bad');return}
+    if(t==='text')rec={recordType:'text',data:v};
+    else if(t==='url'){new URL(v);rec={recordType:'url',data:v}}
+    else if(t==='tel')rec={recordType:'url',data:'tel:'+v.replace(/\s+/g,'')};
+    else if(t==='mime'){JSON.parse(v);rec={recordType:'mime',mediaType:'application/json',data:new TextEncoder().encode(v)}}
+    else rec={recordType:'empty'};
+  }catch(e){st('Invalid input: '+e.message,'bad');return}
+  const c=new AbortController();
+  setTimeout(()=>c.abort(),20000);
+  try{
+    st('Hold a tag against your phone now…');
+    await new NDEFReader().write({records:[rec]},{overwrite:$('ow').checked,signal:c.signal});
+    st('Written successfully.','ok');
+  }catch(err){
+    st('Write failed: '+(err.name==='AbortError'?'timed out':err.message),'bad');
+  }
+};
+$('type').onchange();
+</script>
+</body>
+</html>
